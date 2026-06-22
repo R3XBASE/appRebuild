@@ -21,6 +21,11 @@ result — all without requiring a desktop computer.
 - [Log Files](#log-files)
 - [Workflow Overview](#workflow-overview)
 - [Troubleshooting](#troubleshooting)
+  - [Mirror errors](#mirror-errors----404-broken-packages-or-ssl-symbol-errors)
+  - [apt lock error](#apt-lock-error----could-not-get-lock--held-by-process)
+  - [apktool not found](#package-apktool-has-no-installation-candidate)
+  - [command not found](#apkrebuild-command-not-found)
+  - [curl error 23](#curl-23-client-returned-error-on-write)
 - [Changelog](#changelog)
 - [License](#license)
 
@@ -57,10 +62,23 @@ result — all without requiring a desktop computer.
 Download Termux from [F-Droid](https://f-droid.org/en/packages/com.termux/).
 The Play Store version is outdated and receives no package updates — do not use it.
 
-### Step 2 — Update Termux and install base packages
+### Step 2 — Switch to a reliable mirror and update
+
+Before installing anything, switch the Termux package mirror to the official
+Cloudflare CDN. Third-party mirrors (such as mirrors hosted in China) are
+frequently out of sync and will cause 404 errors or broken package installations.
 
 ```
-pkg update -y && pkg upgrade -y
+echo "deb https://packages.termux.dev/apt/termux-main stable main" > $PREFIX/etc/apt/sources.list
+apt update && apt full-upgrade -y
+```
+
+If `apt full-upgrade` gets stuck on a lock file error, kill the blocking process
+first — see the Troubleshooting section for the full procedure.
+
+After the upgrade completes, install the required packages:
+
+```
 pkg install python openjdk-17 android-tools curl -y
 ```
 
@@ -96,7 +114,15 @@ APT sources at `$PREFIX/etc/apt/sources.list.d/rendiix.list` and imports the
 GPG key. After that, `pkg upgrade apktool` will keep it up to date like any
 other package.
 
-### Step 4 — Download appRebuild
+### Step 4 — Create the bin directory
+
+Termux does not create `~/bin` by default. Create it before downloading:
+
+```
+mkdir -p ~/bin
+```
+
+### Step 5 — Download appRebuild
 
 ```
 curl -fsSL https://raw.githubusercontent.com/R3XBASE/appRebuild/refs/heads/main/appRebuild.py \
@@ -112,7 +138,36 @@ chmod +x appRebuild/appRebuild.py
 ln -s "$PWD/appRebuild/appRebuild.py" ~/bin/appRebuild
 ```
 
-### Step 5 — First run
+> **If curl exits with error (23):** the destination directory does not exist or
+> the disk is full. Confirm `~/bin` was created with `ls ~/bin`, then check free
+> space with `df -h $HOME`. Clear the package cache with `apt clean` if space is
+> low.
+
+### Step 6 — Add ~/bin to PATH
+
+`~/bin` is not in the Termux default PATH. Add it permanently so the
+`appRebuild` command is available in every session:
+
+```
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Verify the command is found:
+
+```
+which appRebuild
+```
+
+It should print `/data/data/com.termux/files/home/bin/appRebuild`.
+
+To run without modifying PATH, use the full path instead:
+
+```
+python3 ~/bin/appRebuild
+```
+
+### Step 7 — First run
 
 ```
 appRebuild
@@ -453,6 +508,71 @@ adb install  /  direct install on device
 
 ## Troubleshooting
 
+### Mirror errors — 404, broken packages, or SSL symbol errors
+
+This is the most common class of errors on fresh or neglected Termux installs.
+Symptoms include:
+
+- `404 Not Found` when running `pkg install` or `apt upgrade`
+- `CANNOT LINK EXECUTABLE "curl": cannot locate symbol "SSL_set_quic_tls_transport_params"`
+- `Unable to fetch some archives`
+- Packages that install but immediately crash on first run
+
+All of these are caused by using an outdated or out-of-sync third-party mirror.
+The fix is to switch to the official Termux CDN hosted on Cloudflare, which is
+always up to date:
+
+```
+echo "deb https://packages.termux.dev/apt/termux-main stable main" > $PREFIX/etc/apt/sources.list
+apt update && apt full-upgrade -y
+```
+
+The `full-upgrade` (not just `upgrade`) is required because it resolves
+dependency conflicts that a standard upgrade would leave behind.
+
+After it completes, open a new Termux session before continuing.
+
+If you have the `termux-change-repo` command available, you can also use the
+interactive mirror selector:
+
+```
+termux-change-repo
+```
+
+Select Cloudflare or the official `packages.termux.dev` entry from the list.
+
+### apt lock error — "Could not get lock ... held by process"
+
+This happens when a previous `apt` or `pkg` process was interrupted (by a
+force-close or network drop) and did not release its lock files.
+
+Step 1 — identify and kill the blocking process (replace `PID` with the number
+shown in the error message):
+
+```
+kill -9 PID
+```
+
+Step 2 — remove the stale lock files:
+
+```
+rm -f $PREFIX/var/lib/apt/lists/lock
+rm -f $PREFIX/var/lib/dpkg/lock
+rm -f $PREFIX/var/lib/dpkg/lock-frontend
+```
+
+Step 3 — repair any half-configured packages:
+
+```
+dpkg --configure -a
+```
+
+Step 4 — retry:
+
+```
+apt update && apt full-upgrade -y
+```
+
 ### "Package 'apktool' has no installation candidate"
 
 This is the most common error on fresh Termux installs. apktool is not in the
@@ -484,7 +604,58 @@ cat $PREFIX/etc/apt/sources.list.d/rendiix.list
 It should contain a line starting with `deb https://rendiix.github.io`. If the
 file is empty or missing, run the installer again.
 
-### "apktool: command not found" (after it was previously installed)
+### "appRebuild: command not found"
+
+`~/bin` is not in the Termux default PATH. Add it permanently:
+
+```
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then try again:
+
+```
+appRebuild
+```
+
+To verify the PATH is set correctly in the current session:
+
+```
+echo $PATH | tr ':' '\n' | grep bin
+```
+
+The output should include a line ending in `/home/bin`. If it does not, run
+`source ~/.bashrc` again or open a new Termux session.
+
+As a fallback, the tool can always be invoked directly without PATH:
+
+```
+python3 ~/bin/appRebuild
+```
+
+### "curl: (23) client returned ERROR on write"
+
+The destination directory does not exist. Create it first:
+
+```
+mkdir -p ~/bin
+```
+
+Then retry the curl command. If the error persists, check available disk space:
+
+```
+df -h $HOME
+```
+
+If free space is below 50 MB, clear the package cache before retrying:
+
+```
+apt clean
+rm -rf ~/.cache
+```
+
+
 
 The PATH may not include the Termux bin directory in the current session. Start
 a fresh Termux session, or run:
