@@ -4,7 +4,7 @@
 ╔══════════════════════════════════════════════════════╗
 ║         appRebuild v2.0  —  by appRebuild            ║
 ║    APK Decompile & Compile Tool for Termux           ║
-║    https://github.com/R3XBASE/appRebuild          ║
+║    https://github.com/R3XBASE/appRebuild.git          ║
 ╚══════════════════════════════════════════════════════╝
 
 License : MIT
@@ -213,9 +213,17 @@ def run_cmd(
 # ──────────────────────────────────────────────────────
 #  DEPENDENCY CHECK
 # ──────────────────────────────────────────────────────
-REQUIRED_PKGS = {
+
+# apktool TIDAK tersedia di repo Termux standar.
+# Installer resmi dari rendiix menambahkan custom APT repo,
+# setelah itu `pkg install apktool` berjalan normal.
+APKTOOL_INSTALLER_URL = (
+    "https://raw.githubusercontent.com/rendiix/termux-apktool/main/install.sh"
+)
+
+# Package yang bisa langsung dari repo Termux standar
+STANDARD_PKGS = {
     "java":      "openjdk-17",
-    "apktool":   "apktool",
 }
 OPTIONAL_TOOLS = {
     "apksigner": "android-tools",
@@ -223,6 +231,7 @@ OPTIONAL_TOOLS = {
     "keytool":   "(bagian dari openjdk-17)",
     "jarsigner": "(bagian dari openjdk-17)",
 }
+
 
 def _tool_version(name: str) -> str:
     """Ambil versi singkat tool."""
@@ -232,7 +241,6 @@ def _tool_version(name: str) -> str:
                 ["java", "-version"], capture_output=True, text=True
             )
             line_ = (r.stderr or r.stdout).splitlines()[0]
-            # "openjdk version \"17.0.x\" ..."
             parts = line_.split('"')
             return parts[1] if len(parts) >= 2 else line_.split()[-1]
         elif name == "apktool":
@@ -244,27 +252,82 @@ def _tool_version(name: str) -> str:
         pass
     return "tersedia"
 
+
+def _install_apktool() -> bool:
+    """
+    Install apktool via installer resmi rendiix/termux-apktool.
+    Installer menambahkan custom APT repo lalu `pkg install apktool`.
+    Return True jika berhasil.
+    """
+    if not shutil.which("curl") and not shutil.which("wget"):
+        err("curl / wget tidak tersedia — install dulu: pkg install curl")
+        return False
+
+    info("Mengunduh installer apktool (rendiix/termux-apktool)...")
+    installer_path = Path("/tmp/apktool_install.sh")
+
+    if shutil.which("curl"):
+        rc, _ = run_cmd(
+            ["curl", "-fsSL", APKTOOL_INSTALLER_URL, "-o", str(installer_path)],
+            stream_output=False,
+        )
+    else:
+        rc, _ = run_cmd(
+            ["wget", "-qO", str(installer_path), APKTOOL_INSTALLER_URL],
+            stream_output=False,
+        )
+
+    if rc != 0 or not installer_path.exists():
+        err("Gagal download installer. Periksa koneksi internet.")
+        info(f"Download manual: curl -fsSL {APKTOOL_INSTALLER_URL} | bash")
+        return False
+
+    info("Menjalankan installer apktool...")
+    rc, _ = run_cmd(["bash", str(installer_path)], stream_output=True)
+    installer_path.unlink(missing_ok=True)
+
+    if shutil.which("apktool") is not None:
+        ok("apktool berhasil diinstall")
+        return True
+    else:
+        err("apktool masih tidak ditemukan setelah installer selesai.")
+        warn("Coba jalankan manual:")
+        print(f"    curl -fsSL {APKTOOL_INSTALLER_URL} | bash")
+        print("    pkg install apktool")
+        return False
+
+
 def check_deps(silent: bool = False) -> bool:
     """
     Periksa dan install dependency yang kurang.
     Return True jika semua required tool tersedia.
     """
     if not silent:
-        banner_mini("🔧 Dependency Check")
+        banner_mini("Dependency Check")
         step("Memeriksa tools yang diperlukan...")
         print()
 
-    missing_pkgs: list[str] = []
+    missing_standard: list[str] = []
+    apktool_missing = shutil.which("apktool") is None
 
-    # Required
-    for tool, pkg in REQUIRED_PKGS.items():
+    # Java (dari repo standar)
+    for tool, pkg in STANDARD_PKGS.items():
         found = shutil.which(tool) is not None
         if found:
             ver = _tool_version(tool)
             ok(f"{tool:<12}: {ver}")
         else:
             err(f"{tool:<12}: tidak ditemukan")
-            missing_pkgs.append(pkg)
+            missing_standard.append(pkg)
+
+    # apktool (repo non-standar)
+    if apktool_missing:
+        err(f"{'apktool':<12}: tidak ditemukan")
+        warn("apktool tidak tersedia di repo Termux standar.")
+        info("Akan diinstall via rendiix/termux-apktool (custom repo).")
+    else:
+        ver = _tool_version("apktool")
+        ok(f"{'apktool':<12}: v{ver}")
 
     print()
 
@@ -278,36 +341,48 @@ def check_deps(silent: bool = False) -> bool:
 
     print()
 
-    if missing_pkgs:
-        warn(f"Package kurang: {', '.join(missing_pkgs)}")
+    all_ok = True
+
+    # Install Java dan standard packages
+    if missing_standard:
+        warn(f"Package kurang: {', '.join(missing_standard)}")
         print()
-        if confirm("Install sekarang via pkg?"):
+        if confirm("Install package standar via pkg?"):
             print()
             info("Update repository...")
             run_cmd(["pkg", "update", "-y"], stream_output=False)
-            all_ok = True
-            for pkg in missing_pkgs:
+            for pkg in missing_standard:
                 info(f"Installing: {pkg}")
-                rc, _ = run_cmd(["pkg", "install", "-y", pkg], stream_output=False)
-                # Verifikasi ulang tool utamanya
+                run_cmd(["pkg", "install", "-y", pkg], stream_output=False)
                 tool_name = next(
-                    (t for t, p in REQUIRED_PKGS.items() if p == pkg), pkg
+                    (t for t, p in STANDARD_PKGS.items() if p == pkg), pkg
                 )
                 if shutil.which(tool_name) is not None:
                     ok(f"{pkg} berhasil diinstall")
                 else:
                     err(f"{pkg} gagal diinstall — coba manual: pkg install {pkg}")
                     all_ok = False
-            if not all_ok:
-                err("Beberapa package gagal diinstall")
-                press_enter()
-                return False
         else:
-            err("Install dependency dulu sebelum menggunakan appRebuild")
-            press_enter()
-            return False
+            all_ok = False
 
-    ok("Semua dependency siap! ✨")
+    # Install apktool via custom installer
+    if apktool_missing:
+        print()
+        if confirm("Install apktool via rendiix/termux-apktool?"):
+            print()
+            if not _install_apktool():
+                all_ok = False
+        else:
+            warn("apktool dibutuhkan untuk decompile dan compile.")
+            all_ok = False
+
+    if not all_ok:
+        err("Beberapa dependency belum terpenuhi.")
+        if not silent:
+            press_enter()
+        return False
+
+    ok("Semua dependency siap!")
     SETUP_FLAG.touch()
 
     if not silent:

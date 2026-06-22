@@ -34,7 +34,11 @@ result — all without requiring a desktop computer.
 | Termux | Any recent F-Droid build | Use F-Droid, not Play Store |
 | Python | 3.8 | `pkg install python` |
 | Java | OpenJDK 17 | `pkg install openjdk-17` |
-| apktool | Any current version | `pkg install apktool` |
+| apktool | Any current version | Not in standard repo — see installation note |
+
+> **Note on apktool:** apktool is not available in the standard Termux package
+> repository. It must be installed via a separate step using a community
+> installer that registers a trusted APT source. The process is described below.
 
 **Optional tools** (improves output quality if present):
 
@@ -51,23 +55,56 @@ result — all without requiring a desktop computer.
 ### Step 1 — Install Termux
 
 Download Termux from [F-Droid](https://f-droid.org/en/packages/com.termux/).
-The Play Store version is outdated and unsupported.
+The Play Store version is outdated and receives no package updates — do not use it.
 
-### Step 2 — Install system dependencies
-
-```
-pkg update -y
-pkg install python openjdk-17 apktool android-tools -y
-```
-
-### Step 3 — Download appRebuild
+### Step 2 — Update Termux and install base packages
 
 ```
-curl -o ~/bin/appRebuild https://raw.githubusercontent.com/R3XBASE/appRebuild/refs/heads/main/appRebuild.py
+pkg update -y && pkg upgrade -y
+pkg install python openjdk-17 android-tools curl -y
+```
+
+### Step 3 — Install apktool
+
+apktool is not in the standard Termux repository. The recommended method is to
+use the community installer by rendiix, which registers a trusted APT repository
+and then installs apktool through `pkg`:
+
+```
+curl -fsSL https://raw.githubusercontent.com/rendiix/termux-apktool/main/install.sh | bash
+```
+
+After the script completes, verify:
+
+```
+apktool --version
+```
+
+You should see a version number such as `2.8.x` or newer. If the command is not
+found, open a new Termux session and try again.
+
+**Alternative (without curl):**
+
+```
+pkg install wget -y
+wget -qO /tmp/install.sh https://raw.githubusercontent.com/rendiix/termux-apktool/main/install.sh
+bash /tmp/install.sh
+```
+
+**What the installer does:** it adds the rendiix package repository to Termux's
+APT sources at `$PREFIX/etc/apt/sources.list.d/rendiix.list` and imports the
+GPG key. After that, `pkg upgrade apktool` will keep it up to date like any
+other package.
+
+### Step 4 — Download appRebuild
+
+```
+curl -fsSL https://raw.githubusercontent.com/R3XBASE/appRebuild/refs/heads/main/appRebuild.py \
+  -o ~/bin/appRebuild
 chmod +x ~/bin/appRebuild
 ```
 
-Or clone the repository:
+Or clone the full repository:
 
 ```
 git clone https://github.com/R3XBASE/appRebuild.git
@@ -75,14 +112,15 @@ chmod +x appRebuild/appRebuild.py
 ln -s "$PWD/appRebuild/appRebuild.py" ~/bin/appRebuild
 ```
 
-### Step 4 — First run
+### Step 5 — First run
 
 ```
 appRebuild
 ```
 
-On first launch, appRebuild checks for all required dependencies automatically
-and prompts to install any that are missing.
+On first launch, appRebuild checks all dependencies and guides you through
+installing anything that is missing. If apktool was not yet installed, the tool
+will offer to run the rendiix installer automatically.
 
 ---
 
@@ -415,17 +453,51 @@ adb install  /  direct install on device
 
 ## Troubleshooting
 
-### "apktool: command not found"
+### "Package 'apktool' has no installation candidate"
+
+This is the most common error on fresh Termux installs. apktool is not in the
+standard Termux repository. Run the rendiix installer to add the correct source:
 
 ```
-pkg install apktool -y
+curl -fsSL https://raw.githubusercontent.com/rendiix/termux-apktool/main/install.sh | bash
 ```
 
-If apktool is still not found after installation:
+If curl is not installed:
 
 ```
-which apktool
-ls /data/data/com.termux/files/usr/bin/apktool
+pkg install curl -y
+curl -fsSL https://raw.githubusercontent.com/rendiix/termux-apktool/main/install.sh | bash
+```
+
+After the installer finishes, open a new Termux session and verify:
+
+```
+apktool --version
+```
+
+If it still shows "command not found", confirm the repository was added:
+
+```
+cat $PREFIX/etc/apt/sources.list.d/rendiix.list
+```
+
+It should contain a line starting with `deb https://rendiix.github.io`. If the
+file is empty or missing, run the installer again.
+
+### "apktool: command not found" (after it was previously installed)
+
+The PATH may not include the Termux bin directory in the current session. Start
+a fresh Termux session, or run:
+
+```
+export PATH="$PREFIX/bin:$PATH"
+```
+
+To make this permanent:
+
+```
+echo 'export PATH="$PREFIX/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ### "java: command not found"
